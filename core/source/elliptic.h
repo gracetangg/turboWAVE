@@ -69,3 +69,29 @@ struct EigenmodePoissonSolver:EllipticSolver
 	virtual void Initialize();
 	virtual void Solve(ScalarField& phi,ScalarField& source,tw::Float mul);
 };
+
+struct MultiGridSolver:EllipticSolver
+{
+	char *mask1,*mask2;
+	tw::Int iterationsPerformed;
+	tw::Float normResidualAchieved,normSource;
+	tw::Int maxIterations;
+	tw::Float tolerance,overrelaxation,minimumNorm;
+
+	MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk);
+	virtual ~MultiGridSolver();
+	virtual void FixPotential(ScalarField& phi,Region* theRegion,const tw::Float& thePotential);
+	virtual void Solve(ScalarField& phi,ScalarField& source,tw::Float mul);
+	virtual void StatusMessage(std::ostream *theStream);
+
+	// void Smoothing(tw::Int l);
+	// void smoothing(tw::Int l);                                  
+    // void restriction_of_defect1(tw::Int l);               
+    // void restriction_of_defect9(tw::Int l);                     
+    // void prolongation(tw::Int l);                               
+    // void keep_ul(tw::Int l);                                    
+    // void keep_u();   
+	// virtual void Solve(tw::Float tol);
+	// virtual void Retrieve(tw::Float **u1);
+
+};

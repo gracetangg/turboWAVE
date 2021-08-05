@@ -117,6 +117,7 @@ std::map<std::string,tw::tool_type> ComputeTool::Map()
 		{"1d elliptic",tw::tool_type::ellipticSolver1D},
 		{"facr elliptic",tw::tool_type::facrPoissonSolver},
 		{"eigenmode elliptic",tw::tool_type::eigenmodePoissonSolver},
+		{"mgm elliptic",tw::tool_type::multiGridSolver},
 		{"yee propagator",tw::tool_type::yeePropagatorPML},
 		{"lorentz propagator",tw::tool_type::lorentzPropagator},
 		{"eos ideal gas tool",tw::tool_type::eosIdealGas},
@@ -234,6 +235,9 @@ ComputeTool* ComputeTool::CreateObjectFromType(const std::string& name,tw::tool_
 			break;
 		case tw::tool_type::eigenmodePoissonSolver:
 			ans = new EigenmodePoissonSolver(name,ms,tsk);
+			break;
+		case tw::tool_type::multiGridSolver:
+			ans = new MultiGridSolver(name,ms,tsk);
 			break;
 		case tw::tool_type::yeePropagatorPML:
 			ans = new YeePropagatorPML(name,ms,tsk);

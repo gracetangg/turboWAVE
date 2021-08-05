@@ -23,7 +23,7 @@ namespace tw
 		// Laser propagators
 		eigenmodePropagator, adiPropagator, isotropicPropagator, schroedingerPropagator,
 		// Elliptic solvers
-		iterativePoissonSolver, facrPoissonSolver, eigenmodePoissonSolver, ellipticSolver1D,
+		iterativePoissonSolver, facrPoissonSolver, eigenmodePoissonSolver, ellipticSolver1D, multiGridSolver,
 		// Diffusion
 		generalParabolicPropagator,
 		// Hyperbolic solvers

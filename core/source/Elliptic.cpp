@@ -796,3 +796,219 @@ void EigenmodePoissonSolver::Solve(ScalarField& phi,ScalarField& source,tw::Floa
 
 	phi.ApplyBoundaryCondition(false);
 }
+
+
+
+/////////////////////////////////
+//                             //
+// MULTIGRID ELLIPTICAL SOLVER //
+//                             //
+/////////////////////////////////
+
+
+
+MultiGridSolver::MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk) : EllipticSolver(name,m,tsk)
+{
+	const tw::Int xDim = space->Dim(1);
+	const tw::Int yDim = space->Dim(2);
+	const tw::Int zDim = space->Dim(3);
+
+	mask1 = new char[xDim*yDim*zDim];
+	mask2 = new char[xDim*yDim*zDim];
+	maxIterations = 1000;
+	tolerance = 1e-8;
+	const tw::Int SOR1 = tsk->globalCells[1] - (tsk->globalCells[1]==1 ? 1 : 0);
+	const tw::Int SOR2 = tsk->globalCells[2] - (tsk->globalCells[2]==1 ? 1 : 0);
+	const tw::Int SOR3 = tsk->globalCells[3] - (tsk->globalCells[3]==1 ? 1 : 0);
+	overrelaxation = 2.0 - 10.0/(SOR1 + SOR2 + SOR3);
+	minimumNorm = tw::small_pos;
+	iterationsPerformed = 0;
+	normSource = 0.0;
+	normResidualAchieved = 0.0;
+	InitializeCLProgram("elliptic.cl");
+
+	bool redSquare = true;
+	for (tw::Int k=1;k<=zDim;k++)
+	{
+		for (tw::Int j=1;j<=yDim;j++)
+		{
+			for (tw::Int i=1;i<=xDim;i++)
+			{
+				const tw::Int n = (i-1) + (j-1)*xDim + (k-1)*xDim*yDim;
+				mask1[n] = redSquare ? 1 : 0;
+				mask2[n] = redSquare ? 0 : 1;
+				if (xDim>1)
+					redSquare = !redSquare;
+			}
+			if (yDim>1)
+				redSquare = !redSquare;
+		}
+		if (zDim>1)
+			redSquare = !redSquare;
+	}
+	directives.Add("tolerance",new tw::input::Float(&tolerance));
+	directives.Add("overrelaxation",new tw::input::Float(&overrelaxation),false);
+}
+
+MultiGridSolver::~MultiGridSolver()
+{
+	delete mask1;
+	delete mask2;
+}
+
+void MultiGridSolver::FixPotential(ScalarField& phi,Region* theRegion,const tw::Float& thePotential)
+{
+	EllipticSolver::FixPotential(phi,theRegion,thePotential);
+	#pragma omp parallel
+	{
+		tw::Int i,j,k,n;
+		for (auto cell : InteriorCellRange(*space))
+		{
+			cell.Decode(&i,&j,&k);
+			n = (i-1) + (j-1)*space->Dim(1) + (k-1)*space->Dim(1)*space->Dim(2);
+			if (theRegion->Inside(space->Pos(cell),*space))
+			{
+				mask1[n] = 0;
+				mask2[n] = 0;
+			}
+		}
+	}
+}
+
+#ifdef USE_OPENCL
+
+void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
+{
+	// solve div(coeff*grad(phi)) = mul*source
+
+	cl_int err;
+	tw::Int iter,i,j,k;
+	const tw::Int xDim = space->Dim(1);
+	const tw::Int yDim = space->Dim(2);
+	const tw::Int zDim = space->Dim(3);
+
+	tw::Float normResidual;
+	ScalarField residual;
+	residual.Initialize(*space,task);
+	residual.InitializeComputeBuffer();
+
+	normSource = 0.0;
+	for (k=1;k<=zDim;k++)
+		for (j=1;j<=yDim;j++)
+			for (i=1;i<=xDim;i++)
+				normSource += fabs(mul*source(i,j,k));
+	task->strip[0].AllSum(&normSource,&normSource,sizeof(tw::Float),0);
+	normSource += minimumNorm;
+
+	cl_kernel SORIterationKernel = clCreateKernel(program,coeff==NULL ? "SORIterationPoisson" : "SORIterationGeneral",&err);
+
+	cl_mem mask1_buffer = clCreateBuffer(task->context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,sizeof(char)*xDim*yDim*zDim,mask1,&err);
+	cl_mem mask2_buffer = clCreateBuffer(task->context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,sizeof(char)*xDim*yDim*zDim,mask2,&err);
+
+	clSetKernelArg(SORIterationKernel,0,sizeof(cl_mem),&phi.computeBuffer);
+	clSetKernelArg(SORIterationKernel,1,sizeof(cl_mem),&source.computeBuffer);
+	clSetKernelArg(SORIterationKernel,2,sizeof(cl_mem),&residual.computeBuffer);
+	clSetKernelArg(SORIterationKernel,3,sizeof(cl_mem),&mask1_buffer);
+	clSetKernelArg(SORIterationKernel,4,sizeof(mul),&mul);
+	clSetKernelArg(SORIterationKernel,5,sizeof(overrelaxation),&overrelaxation);
+	clSetKernelArg(SORIterationKernel,6,sizeof(cl_mem),&space->metricsBuffer);
+	if (coeff!=NULL) clSetKernelArg(SORIterationKernel,7,sizeof(cl_mem),&coeff->computeBuffer);
+
+	for (iter=0;iter<maxIterations;iter++)
+	{
+		// Update the interior (red squares)
+		clSetKernelArg(SORIterationKernel,3,sizeof(cl_mem),&mask1_buffer);
+		space->LocalUpdateProtocol(SORIterationKernel,task->commandQueue);
+
+		phi.UpdateGhostCellsInComputeBuffer();
+
+		// Update the interior (black squares)
+		clSetKernelArg(SORIterationKernel,3,sizeof(cl_mem),&mask2_buffer);
+		space->LocalUpdateProtocol(SORIterationKernel,task->commandQueue);
+
+		phi.UpdateGhostCellsInComputeBuffer();
+
+		// Compute norm of the residual
+
+		normResidual = residual.DestructiveNorm1ComputeBuffer();
+		task->strip[0].AllSum(&normResidual,&normResidual,sizeof(tw::Float),0);
+
+		if (normResidual <= tolerance*normSource)
+			break;
+	}
+	phi.ReceiveFromComputeBuffer();
+	normResidualAchieved = normResidual;
+	iterationsPerformed = iter;
+
+	clReleaseMemObject(mask1_buffer);
+	clReleaseMemObject(mask2_buffer);
+	clReleaseKernel(SORIterationKernel);
+}
+
+#else
+
+void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
+{
+	// solve div(coeff*grad(phi)) = mul*source
+
+	char *maskNow;
+	tw::Int iter,i,j,k,ipass;
+	const tw::Int xDim = space->Dim(1);
+	const tw::Int yDim = space->Dim(2);
+	const tw::Int zDim = space->Dim(3);
+
+	tw::Float residual,normResidual;
+	tw::Float domega,rp1,rp2;
+	std::valarray<tw::Float> D(7);
+
+	normSource = 0.0;
+	for (k=1;k<=zDim;k++)
+		for (j=1;j<=yDim;j++)
+			for (i=1;i<=xDim;i++)
+				normSource += fabs(mul*source(i,j,k));
+	task->strip[0].AllSum(&normSource,&normSource,sizeof(tw::Float),0);
+	normSource += minimumNorm;
+
+	for (iter=0;iter<maxIterations;iter++)
+	{
+		normResidual = 0.0;
+		for (ipass=1;ipass<=2;ipass++)
+		{
+			maskNow = ipass==1 ? mask1 : mask2;
+
+			for (k=1;k<=zDim;k++)
+				for (j=1;j<=yDim;j++)
+					for (i=1;i<=xDim;i++)
+					{
+						if (maskNow[(i-1) + (j-1)*xDim + (k-1)*xDim*yDim]==1)
+						{
+							FormOperatorStencil(D,i,j,k);
+							residual = D[1]*phi(i-1,j,k) + D[2]*phi(i+1,j,k) + D[3]*phi(i,j-1,k) + D[4]*phi(i,j+1,k) + D[5]*phi(i,j,k-1) + D[6]*phi(i,j,k+1) + D[0]*phi(i,j,k) - mul*source(i,j,k);
+							phi(i,j,k) -= overrelaxation*residual/D[0];
+							normResidual += fabs(residual);
+						}
+					}
+
+			phi.CopyFromNeighbors();
+			phi.ApplyBoundaryCondition(false);
+		}
+
+		task->strip[0].AllSum(&normResidual,&normResidual,sizeof(tw::Float),0);
+		if (normResidual <= tolerance*normSource)
+			break;
+	}
+	normResidualAchieved = normResidual;
+	iterationsPerformed = iter;
+}
+
+#endif
+
+void MultiGridSolver::StatusMessage(std::ostream *theStream)
+{
+	*theStream << "this is using the multigrid solver:" << std::endl;
+	*theStream << "Elliptic Solver Status:" << std::endl;
+	*theStream << "   Iterations = " << iterationsPerformed << std::endl;
+	*theStream << "   Overrelaxation = " << overrelaxation << std::endl;
+	*theStream << "   Norm[source] = " << normSource << std::endl;
+	*theStream << "   Norm[residual] = " << normResidualAchieved << std::endl;
+}

@@ -73,8 +73,7 @@ struct EigenmodePoissonSolver:EllipticSolver
 struct MultiGridSolver:EllipticSolver
 {
 	char *mask1,*mask2;
-	tw::Float  ***ul;                                           // numerical solution at level "l"
-    tw::Float  **u;                                             // numerical solution of the PDE
+	tw::Float  ***ul;                                           // numerical solution of the PDE
     tw::Float  **a;                                             // coefficient for u[i][j-1]
     tw::Float  **b;                                             // coefficient for u[i][j]
     tw::Float  **c;                                             // coefficient for u[i][j+1]

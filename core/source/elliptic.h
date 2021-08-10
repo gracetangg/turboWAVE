@@ -76,7 +76,9 @@ struct MultiGridSolver:EllipticSolver
 	tw::Int iterationsPerformed;
 	tw::Float normResidualAchieved,normSource;
 	tw::Int maxIterations;
+	tw::Int GSIterations;
 	tw::Float tolerance,overrelaxation,minimumNorm;
+	// tw::Int levels;
 
 	MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk);
 	virtual ~MultiGridSolver();
@@ -84,13 +86,12 @@ struct MultiGridSolver:EllipticSolver
 	virtual void Solve(ScalarField& phi,ScalarField& source,tw::Float mul);
 	virtual void StatusMessage(std::ostream *theStream);
 
-	// void Smoothing(tw::Int l);
-	// void smoothing(tw::Int l);                                  
+	// void Smoothing(tw::Int l);                             
     // void restriction_of_defect1(tw::Int l);               
     // void restriction_of_defect9(tw::Int l);                     
     // void prolongation(tw::Int l);                               
     // void keep_ul(tw::Int l);                                    
-    // void keep_u();   
+    // void keep_u(x);   
 	// virtual void Solve(tw::Float tol);
 	// virtual void Retrieve(tw::Float **u1);
 

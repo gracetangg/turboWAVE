@@ -809,18 +809,48 @@ void EigenmodePoissonSolver::Solve(ScalarField& phi,ScalarField& source,tw::Floa
 
 MultiGridSolver::MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk) : EllipticSolver(name,m,tsk)
 {
+	// nx, ny, nz
 	const tw::Int xDim = space->Dim(1);
 	const tw::Int yDim = space->Dim(2);
 	const tw::Int zDim = space->Dim(3);
 
+	if(!space->PowersOfTwo())
+		throw tw::FatalError("MultiGrid solver requires all dimensions be in powers of 2.");
+	if(space->Dimensionality()!=2)
+		throw tw::FatalError("MultiGrid solver can only be used in in 2 dimensions.");
+
 	mask1 = new char[xDim*yDim*zDim];
 	mask2 = new char[xDim*yDim*zDim];
-	maxIterations = 1000;
+	maxIterations = 1000; //30 from the driver
+	GSIterations = 20;
 	tolerance = 1e-8;
+
+	// find dx, dy, dz (cell size)
+	const tw::Float dx = space->dX(xDim / 2, 1);
+	const tw::Float dy = space->dX(yDim / 2, 2);
+	const tw::Float dz = space->dX(zDim / 2, 3);
+	//NOTE: xDim * dx gives the actual "size" of the grid
+
+	// SOR1-3 is the dimensions of x, y, z (if they are dim = 1 SOR is 0)
 	const tw::Int SOR1 = tsk->globalCells[1] - (tsk->globalCells[1]==1 ? 1 : 0);
 	const tw::Int SOR2 = tsk->globalCells[2] - (tsk->globalCells[2]==1 ? 1 : 0);
 	const tw::Int SOR3 = tsk->globalCells[3] - (tsk->globalCells[3]==1 ? 1 : 0);
 	overrelaxation = 2.0 - 10.0/(SOR1 + SOR2 + SOR3);
+	// if(SOR1 + SOR2 + SOR3 == 256 * 2)
+	// 	throw tw::FatalError("LSDFJ");
+
+
+	// moved to solve method: 
+	// // determine the number of MG levels along "x" and "y"
+	// const tw::Float nx_levels=int(log2(xDim+0.1))-1;                            // number of levels along "x"
+  	// const tw::Float ny_levels=int(log2(yDim+0.1))-1;                            // number of levels along "y"
+	// const tw::Float nz_levels=int(log2(zDim+0.1))-1;                            // number of levels along "z"
+
+	// // determine the number of MG levels for the whole thing (the min of nx ny nz levels)
+	// levels=nz_levels;if (nx_levels < levels) levels=nx_levels; if (ny_levels < levels) levels=ny_levels;
+
+
+
 	minimumNorm = tw::small_pos;
 	iterationsPerformed = 0;
 	normSource = 0.0;
@@ -847,7 +877,7 @@ MultiGridSolver::MultiGridSolver(const std::string& name,MetricSpace *m,Task *ts
 			redSquare = !redSquare;
 	}
 	directives.Add("tolerance",new tw::input::Float(&tolerance));
-	directives.Add("overrelaxation",new tw::input::Float(&overrelaxation),false);
+	// directives.Add("overrelaxation",new tw::input::Float(&overrelaxation),false);
 }
 
 MultiGridSolver::~MultiGridSolver()
@@ -953,14 +983,33 @@ void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
 
 	char *maskNow;
 	tw::Int iter,i,j,k,ipass;
+	tw::Int l, levels, nmb_iter;
+	tw::Int *ml, *nl;
+
 	const tw::Int xDim = space->Dim(1);
 	const tw::Int yDim = space->Dim(2);
 	const tw::Int zDim = space->Dim(3);
+
+	// determine the number of MG levels along "x" and "y"
+	const tw::Float nx_levels=int(log2(xDim+0.1))-1;                            // number of levels along "x"
+  	const tw::Float ny_levels=int(log2(yDim+0.1))-1;                            // number of levels along "y"
+	const tw::Float nz_levels=int(log2(zDim+0.1))-1;                            // number of levels along "z"
+
+	// determine the number of MG levels for the whole thing (the min of nx ny nz levels)
+	levels=nz_levels;if (nx_levels < levels) levels=nx_levels; if (ny_levels < levels) levels=ny_levels;
+
+
+	nl = new int [ny_levels+1];ml = new int [nx_levels+1];
+	for (l=0;l<=levels;l++) {                                 // begin loop over levels
+		nl[l]=pow(2,ny_levels-levels+l+1);                      // set # points at level "l"
+		ml[l]=pow(2,nx_levels-levels+l+1);                      // set # points at level "l"
+	}
 
 	tw::Float residual,normResidual;
 	tw::Float domega,rp1,rp2;
 	std::valarray<tw::Float> D(7);
 
+	// this for the normSource set up
 	normSource = 0.0;
 	for (k=1;k<=zDim;k++)
 		for (j=1;j<=yDim;j++)
@@ -969,37 +1018,68 @@ void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
 	task->strip[0].AllSum(&normSource,&normSource,sizeof(tw::Float),0);
 	normSource += minimumNorm;
 
-	for (iter=0;iter<maxIterations;iter++)
-	{
-		normResidual = 0.0;
-		for (ipass=1;ipass<=2;ipass++)
-		{
-			maskNow = ipass==1 ? mask1 : mask2;
+	// for (iter=0;iter<maxIterations;iter++)
+	// {
+	// 	normResidual = 0.0;
+	// 	for (ipass=1;ipass<=2;ipass++)
+	// 	{
+	// 		maskNow = ipass==1 ? mask1 : mask2;
 
-			for (k=1;k<=zDim;k++)
-				for (j=1;j<=yDim;j++)
-					for (i=1;i<=xDim;i++)
-					{
-						if (maskNow[(i-1) + (j-1)*xDim + (k-1)*xDim*yDim]==1)
-						{
-							FormOperatorStencil(D,i,j,k);
-							residual = D[1]*phi(i-1,j,k) + D[2]*phi(i+1,j,k) + D[3]*phi(i,j-1,k) + D[4]*phi(i,j+1,k) + D[5]*phi(i,j,k-1) + D[6]*phi(i,j,k+1) + D[0]*phi(i,j,k) - mul*source(i,j,k);
-							phi(i,j,k) -= overrelaxation*residual/D[0];
-							normResidual += fabs(residual);
-						}
-					}
+	// 		for (k=1;k<=zDim;k++)
+	// 			for (j=1;j<=yDim;j++)
+	// 				for (i=1;i<=xDim;i++)
+	// 				{
+	// 					if (maskNow[(i-1) + (j-1)*xDim + (k-1)*xDim*yDim]==1)
+	// 					{
+	// 						FormOperatorStencil(D,i,j,k);
+	// 						residual = D[1]*phi(i-1,j,k) + D[2]*phi(i+1,j,k) + D[3]*phi(i,j-1,k) + D[4]*phi(i,j+1,k) + D[5]*phi(i,j,k-1) + D[6]*phi(i,j,k+1) + D[0]*phi(i,j,k) - mul*source(i,j,k);
+	// 						phi(i,j,k) -= overrelaxation*residual/D[0];
+	// 						normResidual += fabs(residual);
+	// 					}
+	// 				}
 
-			phi.CopyFromNeighbors();
-			phi.ApplyBoundaryCondition(false);
-		}
+	// 		phi.CopyFromNeighbors();
+	// 		phi.ApplyBoundaryCondition(false);
+	// 	}
 
-		task->strip[0].AllSum(&normResidual,&normResidual,sizeof(tw::Float),0);
-		if (normResidual <= tolerance*normSource)
-			break;
-	}
+	// 	task->strip[0].AllSum(&normResidual,&normResidual,sizeof(tw::Float),0);
+	// 	if (normResidual <= tolerance*normSource)
+	// 		break;
+	// }
+  	for (iter=1;iter<=maxIterations;iter++) {                      
+		for (i=0;i<=zDim;i++) {for (j=0;j<=yDim;j++) {for (k=0;k<=xDim;k++) u_tmp[i][j]=phi(i, j, k);}} // replace the method keep_u() with contents
+
+		for (i=0;i<=zDim;i++) {for (j=0;j<=yDim;j++) {for (k=0;k<=xDim;k++) f[i][j]=f0[i][j];}} // recover rhs
+		
+		for (l=levels;l>=0;l--) {                               	// begin "winding"
+			if (l < levels) {                                     	// initialize u[i][j]
+				for (i=0;i<=nl[l];i++) for (j=0;j<=ml[l];j++) phi(i, j, k)=0.0;
+			}                                                     	// end initialize u[i][j]
+			
+			smoothing(l);                                         	// perform Gauss-Seidel iterations
+			
+
+			
+			keep_ul(l);                                           	// keep solution at level "l"
+			if (l > 0) restriction_of_defect9(l);                 	// fine-to-coarse interpolation
+		}                                                       	// end "winding"
+		for (l=1;l<=levels;l++) {                               	// begin "unwinding"
+		prolongation(l);                                     		// coarse-to-fine interpolation
+		}                                                       	// end "unwinding"
+		relat_error[iter]=relative_error;                       	// relative error
+		resid_error[iter]=residual_error;                       	// error of residual
+		
+		//printf(" iteration:%4i  ",iter);                      	// screen info
+		//printf(" |u^(k)-u^(k-1)|=%8.3e ",relat_error[iter]);  	// list error
+		//printf(" |r|/|f|=%8.3e \n",resid_error[iter]);        	// screen info
+		
+		if (residual_error < tolerance) break;                      // exit subroutine
+	}                                                         		// end iterations
+	nmb_iter=iter-1;      
+	
 	normResidualAchieved = normResidual;
 	iterationsPerformed = iter;
-}
+	}
 
 #endif
 
@@ -1008,7 +1088,7 @@ void MultiGridSolver::StatusMessage(std::ostream *theStream)
 	*theStream << "this is using the multigrid solver:" << std::endl;
 	*theStream << "Elliptic Solver Status:" << std::endl;
 	*theStream << "   Iterations = " << iterationsPerformed << std::endl;
-	*theStream << "   Overrelaxation = " << overrelaxation << std::endl;
+	// *theStream << "   Overrelaxation = " << overrelaxation << std::endl;
 	*theStream << "   Norm[source] = " << normSource << std::endl;
 	*theStream << "   Norm[residual] = " << normResidualAchieved << std::endl;
 }

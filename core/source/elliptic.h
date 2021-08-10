@@ -73,26 +73,52 @@ struct EigenmodePoissonSolver:EllipticSolver
 struct MultiGridSolver:EllipticSolver
 {
 	char *mask1,*mask2;
+	tw::Float  ***ul;                                           // numerical solution at level "l"
+    tw::Float  **u;                                             // numerical solution of the PDE
+    tw::Float  **a;                                             // coefficient for u[i][j-1]
+    tw::Float  **b;                                             // coefficient for u[i][j]
+    tw::Float  **c;                                             // coefficient for u[i][j+1]
+    tw::Float  **d;                                             // coefficient for u[i+1][j]
+    tw::Float  **e;                                             // coefficient for u[i-1][j]
+    tw::Float  **dd;                                             // coefficient for D[i][j]
+    tw::Float  **f;                                             // right hand side of the PDE
+    tw::Float  **f0;                                            // right hand side of the PDE
+    tw::Float  **r;                                             // residual of the PDE
+    tw::Float  **u_tmp;                                         // solution of the PDE prev. iter.
+    tw::Float  *relat_error;                                    // relative error between iterations
+    tw::Float  *resid_error;                                    // relative error of the residual
+    tw::Int *ml;                                             // number of grid points at level "l"
+    tw::Int *nl;                                             // number of grid points at level "l"
+    tw::Int nx_levels;                                       // number of levels along "x"
+    tw::Int ny_levels;                                       // number of levels along "y"
+    tw::Int l;                                               // current level: l=0...level
+    tw::Int nx;                                              // number of grid points along "x"
+    tw::Int ny;                                              // number of grid points along "y"
+    tw::Int nz;
+	tw::Int i,j;                                             // indices: i=0...ny, j=0...nx
+    tw::Int iter;                                            // global iteration counter
+    tw::Int levels;                                          // number of MG levels
+    tw::Int GS_iter;                                         // number of Gauss-Seidel iter
+    tw::Int max_iter;                                        // maximum number of MG iterations
+    tw::Float  dx,dy;                                           // steps along "x" and "y"
+	tw::Int l1, l2;
+
+	//public from driver
+    tw::Int nmb_iter;                                           // actual number of MGM iterations
+    tw::Float  tol;                                             // input acceptable tolerance error
+    tw::Float  residual_error;                                  // error of the residual
+    tw::Float  relative_error;                                  // error between two successive iter.
+
+	//originally from iterative solver
 	tw::Int iterationsPerformed;
 	tw::Float normResidualAchieved,normSource;
 	tw::Int maxIterations;
 	tw::Int GSIterations;
 	tw::Float tolerance,overrelaxation,minimumNorm;
-	// tw::Int levels;
 
 	MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk);
 	virtual ~MultiGridSolver();
 	virtual void FixPotential(ScalarField& phi,Region* theRegion,const tw::Float& thePotential);
 	virtual void Solve(ScalarField& phi,ScalarField& source,tw::Float mul);
 	virtual void StatusMessage(std::ostream *theStream);
-
-	// void Smoothing(tw::Int l);                             
-    // void restriction_of_defect1(tw::Int l);               
-    // void restriction_of_defect9(tw::Int l);                     
-    // void prolongation(tw::Int l);                               
-    // void keep_ul(tw::Int l);                                    
-    // void keep_u(x);   
-	// virtual void Solve(tw::Float tol);
-	// virtual void Retrieve(tw::Float **u1);
-
 };

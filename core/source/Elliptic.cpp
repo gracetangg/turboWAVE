@@ -809,73 +809,74 @@ void EigenmodePoissonSolver::Solve(ScalarField& phi,ScalarField& source,tw::Floa
 
 MultiGridSolver::MultiGridSolver(const std::string& name,MetricSpace *m,Task *tsk) : EllipticSolver(name,m,tsk)
 {
+
 	// nx, ny, nz
-	const tw::Int xDim = space->Dim(1);
-	const tw::Int yDim = space->Dim(2);
-	const tw::Int zDim = space->Dim(3);
+	// const tw::Int xDim = space->Dim(1);
+	// const tw::Int yDim = space->Dim(2);
+	// const tw::Int zDim = space->Dim(3);
 
 	if(!space->PowersOfTwo())
 		throw tw::FatalError("MultiGrid solver requires all dimensions be in powers of 2.");
 	if(space->Dimensionality()!=2)
 		throw tw::FatalError("MultiGrid solver can only be used in in 2 dimensions.");
 
-	mask1 = new char[xDim*yDim*zDim];
-	mask2 = new char[xDim*yDim*zDim];
+
 	maxIterations = 1000; //30 from the driver
 	GSIterations = 20;
+	GS_iter = 20;
 	tolerance = 1e-8;
 
+	nx = space->Dim(1)==1 ? space->Dim(2) : space->Dim(1);
+	ny = space->Dim(2)==1 ? space->Dim(3) : space->Dim(2);
+	// nz = space->Dim(3);
+
 	// find dx, dy, dz (cell size)
-	const tw::Float dx = space->dX(xDim / 2, 1);
-	const tw::Float dy = space->dX(yDim / 2, 2);
-	const tw::Float dz = space->dX(zDim / 2, 3);
+	const tw::Float dx = space->dX(nx / 2, 1);
+	const tw::Float dy = space->dX(ny / 2, 2);
+	// const tw::Float dx = space->dX(xDim / 2, 1);
+	// const tw::Float dy = space->dX(yDim / 2, 2);
+	// const tw::Float dz = space->dX(zDim / 2, 3);
 	//NOTE: xDim * dx gives the actual "size" of the grid
 
 	// SOR1-3 is the dimensions of x, y, z (if they are dim = 1 SOR is 0)
-	const tw::Int SOR1 = tsk->globalCells[1] - (tsk->globalCells[1]==1 ? 1 : 0);
-	const tw::Int SOR2 = tsk->globalCells[2] - (tsk->globalCells[2]==1 ? 1 : 0);
-	const tw::Int SOR3 = tsk->globalCells[3] - (tsk->globalCells[3]==1 ? 1 : 0);
-	overrelaxation = 2.0 - 10.0/(SOR1 + SOR2 + SOR3);
+	// const tw::Int SOR1 = tsk->globalCells[1] - (tsk->globalCells[1]==1 ? 1 : 0);
+	// const tw::Int SOR2 = tsk->globalCells[2] - (tsk->globalCells[2]==1 ? 1 : 0);
+	// const tw::Int SOR3 = tsk->globalCells[3] - (tsk->globalCells[3]==1 ? 1 : 0);
+	// overrelaxation = 2.0 - 10.0/(SOR1 + SOR2 + SOR3);
 	// if(SOR1 + SOR2 + SOR3 == 256 * 2)
 	// 	throw tw::FatalError("LSDFJ");
 
-
-	// moved to solve method: 
-	// // determine the number of MG levels along "x" and "y"
-	// const tw::Float nx_levels=int(log2(xDim+0.1))-1;                            // number of levels along "x"
-  	// const tw::Float ny_levels=int(log2(yDim+0.1))-1;                            // number of levels along "y"
+	// determine the number of MG levels along "x" and "y"
+	nx_levels=int(log2(nx+0.1))-1;                            // number of levels along "x"
+  	ny_levels=int(log2(ny+0.1))-1;                            // number of levels along "y"
 	// const tw::Float nz_levels=int(log2(zDim+0.1))-1;                            // number of levels along "z"
 
-	// // determine the number of MG levels for the whole thing (the min of nx ny nz levels)
+	// determine the number of MG levels for the whole thing (the min of nx ny nz levels)
 	// levels=nz_levels;if (nx_levels < levels) levels=nx_levels; if (ny_levels < levels) levels=ny_levels;
+	levels=ny_levels;if (nx_levels < ny_levels) levels=nx_levels;
 
-
-
-	minimumNorm = tw::small_pos;
-	iterationsPerformed = 0;
-	normSource = 0.0;
-	normResidualAchieved = 0.0;
-	InitializeCLProgram("elliptic.cl");
-
-	bool redSquare = true;
-	for (tw::Int k=1;k<=zDim;k++)
-	{
-		for (tw::Int j=1;j<=yDim;j++)
-		{
-			for (tw::Int i=1;i<=xDim;i++)
-			{
-				const tw::Int n = (i-1) + (j-1)*xDim + (k-1)*xDim*yDim;
-				mask1[n] = redSquare ? 1 : 0;
-				mask2[n] = redSquare ? 0 : 1;
-				if (xDim>1)
-					redSquare = !redSquare;
-			}
-			if (yDim>1)
-				redSquare = !redSquare;
-		}
-		if (zDim>1)
-			redSquare = !redSquare;
-	}
+	u  = new double *[ny+1];for (i=0;i<=ny;i++) u[i]  = new double [nx+1];
+	a  = new double *[ny+1];for (i=0;i<=ny;i++) a[i]  = new double [nx+1];
+	b  = new double *[ny+1];for (i=0;i<=ny;i++) b[i]  = new double [nx+1];
+	c  = new double *[ny+1];for (i=0;i<=ny;i++) c[i]  = new double [nx+1];
+	d  = new double *[ny+1];for (i=0;i<=ny;i++) d[i]  = new double [nx+1];
+	e  = new double *[ny+1];for (i=0;i<=ny;i++) e[i]  = new double [nx+1];
+	f  = new double *[ny+1];for (i=0;i<=ny;i++) f[i]  = new double [nx+1];
+	r  = new double *[ny+1];for (i=0;i<=ny;i++) r[i]  = new double [nx+1];
+	dd  = new double *[ny+1];for (i=0;i<=ny;i++) dd[i]  = new double [nx+1];
+	f0 = new double *[ny+1];for (i=0;i<=ny;i++) f0[i] = new double [nx+1];
+	u_tmp = new double *[ny+1];for (i=0;i<=ny;i++) u_tmp[i] = new double [nx+1];
+	nl = new int [ny_levels+1];ml = new int [nx_levels+1];
+	ul = new double **[levels+1];
+	for (l=0;l<=levels;l++) {                                 // begin loop over levels
+		l1=pow(2,ny_levels-levels+l+1)+1;                       // number of grid points along "y"
+		l2=pow(2,nx_levels-levels+l+1)+1;                       // number of grid points along "x"
+		ul[l]= new double *[l1];                                // reserve memory for "ul"
+		for (i=0;i<=l1;i++) ul[l][i] = new double [l2];         // reserve memory for "ul"
+	}                                                         // end loop over levels
+	relat_error = new double [max_iter+1];                    // reserve memory for "relat_error"
+	resid_error = new double [max_iter+1];                    // reserve memory for "resid_error"
+	
 	directives.Add("tolerance",new tw::input::Float(&tolerance));
 	// directives.Add("overrelaxation",new tw::input::Float(&overrelaxation),false);
 }
@@ -981,101 +982,151 @@ void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
 {
 	// solve div(coeff*grad(phi)) = mul*source
 
-	char *maskNow;
-	tw::Int iter,i,j,k,ipass;
-	tw::Int l, levels, nmb_iter;
-	tw::Int *ml, *nl;
+	// char *maskNow;
+	// tw::Int iter,i,j,k,ipass;
+	// tw::Int l, levels, nmb_iter;
+	// tw::Int *ml, *nl;
 
-	const tw::Int xDim = space->Dim(1);
-	const tw::Int yDim = space->Dim(2);
-	const tw::Int zDim = space->Dim(3);
+	// const tw::Int xDim = space->Dim(1);
+	// const tw::Int yDim = space->Dim(2);
+	// const tw::Int zDim = space->Dim(3);
 
-	// determine the number of MG levels along "x" and "y"
-	const tw::Float nx_levels=int(log2(xDim+0.1))-1;                            // number of levels along "x"
-  	const tw::Float ny_levels=int(log2(yDim+0.1))-1;                            // number of levels along "y"
-	const tw::Float nz_levels=int(log2(zDim+0.1))-1;                            // number of levels along "z"
+	// // determine the number of MG levels along "x" and "y"
+	// const tw::Float nx_levels=int(log2(xDim+0.1))-1;                            // number of levels along "x"
+  	// const tw::Float ny_levels=int(log2(yDim+0.1))-1;                            // number of levels along "y"
+	// const tw::Float nz_levels=int(log2(zDim+0.1))-1;                            // number of levels along "z"
 
-	// determine the number of MG levels for the whole thing (the min of nx ny nz levels)
-	levels=nz_levels;if (nx_levels < levels) levels=nx_levels; if (ny_levels < levels) levels=ny_levels;
+	// // determine the number of MG levels for the whole thing (the min of nx ny nz levels)
+	// levels=nz_levels;if (nx_levels < levels) levels=nx_levels; if (ny_levels < levels) levels=ny_levels;
 
-
-	nl = new int [ny_levels+1];ml = new int [nx_levels+1];
-	for (l=0;l<=levels;l++) {                                 // begin loop over levels
-		nl[l]=pow(2,ny_levels-levels+l+1);                      // set # points at level "l"
-		ml[l]=pow(2,nx_levels-levels+l+1);                      // set # points at level "l"
-	}
 
 	tw::Float residual,normResidual;
 	tw::Float domega,rp1,rp2;
 	std::valarray<tw::Float> D(7);
 
-	// this for the normSource set up
-	normSource = 0.0;
-	for (k=1;k<=zDim;k++)
-		for (j=1;j<=yDim;j++)
-			for (i=1;i<=xDim;i++)
-				normSource += fabs(mul*source(i,j,k));
-	task->strip[0].AllSum(&normSource,&normSource,sizeof(tw::Float),0);
-	normSource += minimumNorm;
 
-	// for (iter=0;iter<maxIterations;iter++)
-	// {
-	// 	normResidual = 0.0;
-	// 	for (ipass=1;ipass<=2;ipass++)
-	// 	{
-	// 		maskNow = ipass==1 ? mask1 : mask2;
+	for (l=0;l<=levels;l++) {                                 // begin loop over levels
+		nl[l]=pow(2,ny_levels-levels+l+1);                      // set # points at level "l"
+		ml[l]=pow(2,nx_levels-levels+l+1);                      // set # points at level "l"
+	}                                                         // end loop over levels
+	// copy input array data into local class data
+	for (i=0;i<=ny;i++) {                                     // begin loop over "i"
+		for (j=0;j<=nx;j++) {                                   // begin loop over "j"
+		this->u[i][j]=phi(i, 1, j);                               // copy u1->u
+		this->dd[i][j]=8.854187817e-12;									//grabs the coeff from this obj (if this doesn't work try e0)
+		this->f[i][j]=source(i, 1, j);                               // copy f1->f
+		}                                                       // end loop over "j"
+	}                                                         // end loop over "i"
+	// copy right hand side array "f" into "f0" so that "f" is not lost
+	for (i=0;i<=ny;i++) {for (j=0;j<=nx;j++) f0[i][j]=f[i][j];} // f->f0
+	
+	// from solve method
+	for (iter=1;iter<=max_iter;iter++) {                      // begin iterations
+		for (i=0;i<=ny;i++) {for (j=0;j<=nx;j++) u_tmp[i][j]=u[i][j];}
+		for (i=0;i<=ny;i++) {for (j=0;j<=nx;j++) f[i][j]=f0[i][j];} // recover rhs
+		for (l=levels;l>=0;l--) {                               // begin "winding"
+		if (l < levels) {                                     // initialize u[i][j]
+			for (i=0;i<=nl[l];i++) for (j=0;j<=ml[l];j++) u[i][j]=0.0;
+		}                                                     // end initialize u[i][j]
+		// smoothing(l);                                         // perform Gauss-Seidel iterations
+		double sum1,sum2,sum3,sum4,dX2,dY2;                       // local variables
+		int iter,is,ic,in,jw,jc,je,step;                          // local variables
+		step=pow(2,levels-l);                                     // step depending on level "l"
+		dX2=2.0*sqr(dx*step);                                     // 2*(step*dx)^2
+		dY2=2.0*sqr(dy*step);                                     // 2*(step*dy)^2
+		// set up coefficients "a", "b", "c" and "d" on interior points
+		for (i=1;i<=nl[l]-1;i++) {                                // begin loop over "i"
+			for (j=1;j<=ml[l]-1;j++) {                              // begin loop over "j"
+			is=(i-1)*step;ic=i*step;in=(i+1)*step;                // i-1,i,i+1
+			jw=(j-1)*step;jc=j*step;je=(j+1)*step;                // j-1,j,j+1
+			a[i][j]=(dd[ic][jw]+dd[ic][jc])/dX2;                    // set a[i][j]
+			c[i][j]=(dd[ic][je]+dd[ic][jc])/dX2;                    // set c[i][j]
+			d[i][j]=(dd[in][jc]+dd[ic][jc])/dY2;                    // set d[i][j]
+			e[i][j]=(dd[is][jc]+dd[ic][jc])/dY2;                    // set e[i][j]
+			b[i][j]=-a[i][j]-c[i][j]-d[i][j]-e[i][j];             // set b[i][j]
+			}                                                       // end loop over "j"
+		}                                                         // end loop over "i"
+		// calculate residual "r" and solution "u" on interior points
+		for (iter=1;iter<=GS_iter;iter++) {                       // begin iterations
+			for (i=1;i<=nl[l]-1;i++) {                              // begin loop over "i"
+			for (j=1;j<=ml[l]-1;j++) {                            // begin loop over "j"
+				r[i][j]=(a[i][j]*u[i][j-1]+b[i][j]*u[i][j]+c[i][j]*u[i][j+1]+d[i][j]*u[i+1][j]+e[i][j]*u[i-1][j]-f[i][j]);
+			}                                                     // end loop over "j"
+			}                                                       // end loop over "i"
+			for (i=1;i<=nl[l]-1;i++) {                              // begin loop over "i"
+			for (j=1;j<=ml[l]-1;j++) {                            // begin loop over "j"
+				u[i][j]-=r[i][j]/b[i][j];                           // u[i][j]=...
+			}                                                     // end loop over "j"
+			}                                                       // end loop over "i"
+		}                                                         // end iterations
+		// if on original grid (highest level), calculate relative errors
+		if (l == levels) {                                        // begin error of the residual
+			sum1=0.0;sum2=0.0;sum3=0.0;sum4=0.0;                    // set sum to 0
+			for (i=1;i<=nl[l]-1;i++) {                              // begin loop over "i"
+			for (j=1;j<=ml[l]-1;j++) {                            // begin loop over "j"
+				sum1+=sqr(r[i][j]);sum2+=sqr(f[i][j]);              // accumulate in sum1 and sum2
+				sum3+=sqr(u[i][j]-u_tmp[i][j]);sum4+=sqr(u[i][j]);  // accumulate in sum3 and sum4
+			}                                                     // end loop over "j"
+			}                                                       // end loop over "i"
+			residual_error=sqrt(sum1/sum2);                         // relative error of the residual
+			relative_error=sqrt(sum3/sum4);                         // relative error between two iter.
+		}                                                         // end error of the residual
+	
+		for (i=0;i<=nl[l];i++) {for (j=0;j<=ml[l];j++) ul[l][i][j]=u[i][j];}
 
-	// 		for (k=1;k<=zDim;k++)
-	// 			for (j=1;j<=yDim;j++)
-	// 				for (i=1;i<=xDim;i++)
-	// 				{
-	// 					if (maskNow[(i-1) + (j-1)*xDim + (k-1)*xDim*yDim]==1)
-	// 					{
-	// 						FormOperatorStencil(D,i,j,k);
-	// 						residual = D[1]*phi(i-1,j,k) + D[2]*phi(i+1,j,k) + D[3]*phi(i,j-1,k) + D[4]*phi(i,j+1,k) + D[5]*phi(i,j,k-1) + D[6]*phi(i,j,k+1) + D[0]*phi(i,j,k) - mul*source(i,j,k);
-	// 						phi(i,j,k) -= overrelaxation*residual/D[0];
-	// 						normResidual += fabs(residual);
-	// 					}
-	// 				}
-
-	// 		phi.CopyFromNeighbors();
-	// 		phi.ApplyBoundaryCondition(false);
-	// 	}
-
-	// 	task->strip[0].AllSum(&normResidual,&normResidual,sizeof(tw::Float),0);
-	// 	if (normResidual <= tolerance*normSource)
-	// 		break;
-	// }
-  	for (iter=1;iter<=maxIterations;iter++) {                      
-		for (i=0;i<=zDim;i++) {for (j=0;j<=yDim;j++) {for (k=0;k<=xDim;k++) u_tmp[i][j]=phi(i, j, k);}} // replace the method keep_u() with contents
-
-		for (i=0;i<=zDim;i++) {for (j=0;j<=yDim;j++) {for (k=0;k<=xDim;k++) f[i][j]=f0[i][j];}} // recover rhs
+		if (l > 0){
+			i=0;for (j=0;j<=ml[l-1];j++)         f[i][j]=r[2*i][2*j]; // i=0
+			i=nl[l-1];for (j=0;j<=ml[l-1];j++)   f[i][j]=r[2*i][2*j]; // i=nl[l-1]
+			j=0;for (i=1;i<=nl[l-1]-1;i++)       f[i][j]=r[2*i][2*j]; // j=0
+			j=ml[l-1];for (i=1;i<=nl[l-1]-1;i++) f[i][j]=r[2*i][2*j]; // j=ml[l-1]
+			// grid points in the interior
+			for (i=1;i<=nl[l-1]-1;i++) {                              // begin loop over "i"
+				for (j=1;j<=ml[l-1]-1;j++) {                            // begin loop over "j"
+				f[i][j]=r[2*i-1][2*j-1]/16.0+r[2*i-1][2*j]/8.0+r[2*i-1][2*j+1]/16.0+
+						r[2*i+0][2*j-1]/8.00+r[2*i+0][2*j]/4.0+r[2*i+0][2*j+1]/8.00+
+						r[2*i+1][2*j-1]/16.0+r[2*i+1][2*j]/8.0+r[2*i+1][2*j+1]/16.0;
+				}                                                       // end loop over "j"
+			} 
+		} 
 		
-		for (l=levels;l>=0;l--) {                               	// begin "winding"
-			if (l < levels) {                                     	// initialize u[i][j]
-				for (i=0;i<=nl[l];i++) for (j=0;j<=ml[l];j++) phi(i, j, k)=0.0;
-			}                                                     	// end initialize u[i][j]
-			
-			smoothing(l);                                         	// perform Gauss-Seidel iterations
-			
-
-			
-			keep_ul(l);                                           	// keep solution at level "l"
-			if (l > 0) restriction_of_defect9(l);                 	// fine-to-coarse interpolation
-		}                                                       	// end "winding"
-		for (l=1;l<=levels;l++) {                               	// begin "unwinding"
-		prolongation(l);                                     		// coarse-to-fine interpolation
-		}                                                       	// end "unwinding"
-		relat_error[iter]=relative_error;                       	// relative error
-		resid_error[iter]=residual_error;                       	// error of residual
 		
-		//printf(" iteration:%4i  ",iter);                      	// screen info
-		//printf(" |u^(k)-u^(k-1)|=%8.3e ",relat_error[iter]);  	// list error
-		//printf(" |r|/|f|=%8.3e \n",resid_error[iter]);        	// screen info
+		}                                                       // end "winding"
+		for (l=1;l<=levels;l++) {                               // begin "unwinding"
+			//prolongation
+			for (i=0;i<=nl[l-1]-1;i++) {                              // begin loop over "i"
+				for (j=0;j<=ml[l-1]-1;j++) {                            // begin loop over "j"
+				ul[l][2*i][2*j]-=u[i][j];                             // even "i" & even "j"
+				ul[l][2*i+1][2*j]-=(u[i][j]+u[i+1][j])/2.0;           // odd  "i" & even "j"
+				ul[l][2*i][2*j+1]-=(u[i][j]+u[i][j+1])/2.0;           // even "i" & odd  "j"
+				ul[l][2*i+1][2*j+1]-=(u[i][j]+u[i][j+1]+u[i+1][j]+u[i+1][j+1])/4.0;// odd "i" & odd "j"
+				}                                                       // end loop over "j"
+				j=ml[l-1];ul[l][2*i][2*j]-=u[i][j];                     // even "i" & even "j"
+				ul[l][2*i+1][2*j]-=(u[i][j]+u[i+1][j])/2.0;             // odd  "i" & even "j"
+			}                                                         // end loop over "i"
+			i=nl[l-1];                                                // last row with i=nl[l-1]
+			for (j=0;j<=ml[l-1]-1;j++) {                              // begin loop over "j"
+				ul[l][2*i][2*j]-=u[i][j];                               // even "i" & even "j"
+				ul[l][2*i][2*j+1]-=(u[i][j]+u[i][j+1])/2.0;             // even "i" & odd  "j"
+			}                                                         // end loop over "j"
+			j=ml[l-1];ul[l][2*i][2*j]-=u[i][j];                       // top right corner
+			// put solution ul[l][i][j] at level "l" back into u[i][j], i.e. ul[l][i][j] -> u[i][j]
+			for (i=0;i<=nl[l];i++) {for (j=0;j<=ml[l];j++) u[i][j]=ul[l][i][j];}
 		
-		if (residual_error < tolerance) break;                      // exit subroutine
-	}                                                         		// end iterations
-	nmb_iter=iter-1;      
+		}                                                       // end "unwinding"
+		relat_error[iter]=relative_error;                       // relative error
+		resid_error[iter]=residual_error;                       // error of residual
+		//printf(" iteration:%4i  ",iter);                      // screen info
+		//printf(" |u^(k)-u^(k-1)|=%8.3e ",relat_error[iter]);  // list error
+		//printf(" |r|/|f|=%8.3e \n",resid_error[iter]);        // screen info
+		if (residual_error < tol) break;                        // exit subroutine
+	}                                                         // end iterations
+	nmb_iter=iter-1;                                          // actual number of MGM iterations
+    
+	for (i=1;i<=nl[l]-1;i++) {                                // begin loop over "i"
+		for (j=1;j<=ml[l]-1;j++) {  
+			phi(i, 1, j) = u[i][j];
+		}
+	}
 	
 	normResidualAchieved = normResidual;
 	iterationsPerformed = iter;
@@ -1085,7 +1136,6 @@ void MultiGridSolver::Solve(ScalarField& phi,ScalarField& source,tw::Float mul)
 
 void MultiGridSolver::StatusMessage(std::ostream *theStream)
 {
-	*theStream << "this is using the multigrid solver:" << std::endl;
 	*theStream << "Elliptic Solver Status:" << std::endl;
 	*theStream << "   Iterations = " << iterationsPerformed << std::endl;
 	// *theStream << "   Overrelaxation = " << overrelaxation << std::endl;

@@ -78,10 +78,9 @@ struct MultiGridSolver:EllipticSolver
     tw::Float  **b;                                             // coefficient for u[i][j]
     tw::Float  **c;                                             // coefficient for u[i][j+1]
     tw::Float  **d;                                             // coefficient for u[i+1][j]
-    tw::Float  **e;                                             // coefficient for u[i-1][j]
-    tw::Float  **dd;                                             // coefficient for D[i][j]
-    tw::Float  **f;                                             // right hand side of the PDE
-    tw::Float  **f0;                                            // right hand side of the PDE
+    tw::Float  **e;
+  
+	ScalarField coefficients;                                    // right hand side of the PDE
     tw::Float  **r;                                             // residual of the PDE
     tw::Float  **u_tmp;                                         // solution of the PDE prev. iter.
     tw::Float  *relat_error;                                    // relative error between iterations
@@ -120,4 +119,5 @@ struct MultiGridSolver:EllipticSolver
 	virtual void FixPotential(ScalarField& phi,Region* theRegion,const tw::Float& thePotential);
 	virtual void Solve(ScalarField& phi,ScalarField& source,tw::Float mul);
 	virtual void StatusMessage(std::ostream *theStream);
+	virtual void Smoothing(ScalarField& phi,ScalarField& source,tw::Int l);
 };
